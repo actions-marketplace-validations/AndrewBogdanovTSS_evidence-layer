@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { artifactId, formatArtifact } from '../src/core/artifact'
 import { gatherEvidence } from '../src/core/gather'
@@ -123,7 +123,7 @@ describe('sourceFingerprint', () => {
     const wt = dir + '-wt'
     sh(dir, 'worktree', 'add', '-q', wt)
     expect(readFileSync(join(wt, '.git'), 'utf8')).toMatch(/^gitdir: /)
-    expect(stateDir(wt)).toBe(join(dir, '.git', 'worktrees', wt.split('/').at(-1)!, 'evidence-layer'))
+    expect(stateDir(wt)).toBe(join(dir, '.git', 'worktrees', basename(wt), 'evidence-layer'))
     expect(fp(wt).treeId).toBe(fp(dir).treeId)
   })
 })
@@ -131,21 +131,21 @@ describe('sourceFingerprint', () => {
 describe('sourceFingerprint moves for every change git can see, and names it', () => {
   // DEC-0005: editing any non-ignored file always moves the fingerprint. An
   // edit is one kind of change; these are the others a working tree has.
-  const cases: [string, (dir: string) => void, string[]][] = [
+  const cases: [string, (dir: string) => void, string[], { skip?: boolean }?][] = [
     ['a deleted tracked file', (dir) => rmSync(join(dir, 'src/a.js')), ['src/a.js']],
     ['a renamed file - as its old path and its new one', (dir) => renameSync(join(dir, 'src/a.js'), join(dir, 'src/b.js')), ['src/a.js', 'src/b.js']],
     ['a deleted directory, every file in it', (dir) => rmSync(join(dir, 'src'), { recursive: true }), ['src/a.js', 'src/nested/c.js']],
     ['a deleted untracked file', (dir) => rmSync(join(dir, 'notes.txt')), ['notes.txt']],
     ['a symbolic link pointed elsewhere', (dir) => (rmSync(join(dir, 'link')), symlinkSync('src/nested/c.js', join(dir, 'link'))), ['link']],
-  ]
-  if (process.platform !== 'win32') {
     // Git records only the executable bit, and only where `core.fileMode` is
     // on - the default on POSIX; Windows has no bit to record, so no change.
-    cases.push(['a file made executable', (dir) => chmodSync(join(dir, 'src/a.js'), 0o755), ['src/a.js']])
-  }
+    // Skipped there rather than left out, so the suite is one size everywhere
+    // and the README's test count holds on every platform.
+    ['a file made executable', (dir) => chmodSync(join(dir, 'src/a.js'), 0o755), ['src/a.js'], { skip: process.platform === 'win32' }],
+  ]
 
-  for (const [what, change, named] of cases) {
-    it(what, () => {
+  for (const [what, change, named, opts] of cases) {
+    it(what, opts ?? {}, () => {
       const dir = repo({ 'src/a.js': 'a\n', 'src/nested/c.js': 'c\n' })
       symlinkSync('src/a.js', join(dir, 'link'))
       writeFileSync(join(dir, 'notes.txt'), 'untracked, not ignored\n')
@@ -166,6 +166,29 @@ describe('sourceFingerprint moves for every change git can see, and names it', (
     mkdirSync(join(dir, 'build'))
     writeFileSync(join(dir, 'build/out.js'), 'generated\n')
     expect(fp(dir).treeId).toBe(before)
+  })
+
+  // An edit that keeps a file's size, made in the second git last wrote the
+  // index, matches every stat field Linux git compares - it reads timestamps
+  // to the second. git rereads such a file only because its entry is not
+  // older than the index ("racily clean"). A throwaway copy of the index
+  // stamped with the moment it was copied is newer than that entry once the
+  // copy falls in the next second, and the edit reads as no change: the seal
+  // called changed code fresh, intermittently, in example.test.ts on Linux CI.
+  // So the timing is made to happen rather than faked with utimes: commit and
+  // edit inside one second, fingerprint in the next. Where git compares
+  // sub-second times (git for Windows) it holds either way.
+  it('moves for a same-size edit made in the second the index was written', () => {
+    const waitUntil = (ready: () => boolean) => {
+      while (!ready()) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    }
+    waitUntil(() => Date.now() % 1000 < 100)
+    const dir = repo({ 'src/a.js': 'n + 1\n' })
+    const before = fp(dir).treeId
+    writeFileSync(join(dir, 'src/a.js'), 'n + 2\n')
+    const second = Math.floor(statSync(join(dir, '.git', 'index')).mtimeMs / 1000)
+    waitUntil(() => Math.floor(Date.now() / 1000) > second)
+    expect(fp(dir).treeId).not.toBe(before)
   })
 
   it('makes a sealed run stale for a rename, naming both paths', () => {

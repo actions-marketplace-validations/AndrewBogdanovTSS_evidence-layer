@@ -22,10 +22,12 @@ It exists twice over.
    | File | What it does |
    | --- | --- |
    | [`package.json`](package.json) | `evidence-layer` as a dev dependency (this checkout, via `file:../..`; in your project, the registry) and an `evidence` script |
-   | [`scripts/evidence.mjs`](scripts/evidence.mjs) | gathers the evidence before a review is written: runs `npm test`, appends Node's test counts as a work summary, seals the run |
-   | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | the suite, then the GitHub Action over the change's `review.md` and the decision records |
+   | [`scripts/evidence.mjs`](scripts/evidence.mjs) | gathers the evidence before a review is written: runs `npm test`, appends Node's test counts as a work summary, seals the run, and exits 1 when the suite failed |
+   | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | gathers in CI - the suite runs once, inside the gather - and uploads the bundle; checks governance alongside; on a pull request, a model reviews from the bundle and its review is held to that bundle - see [below](#in-ci-gather-review-verify) |
+   | [`scripts/ci-local.mjs`](scripts/ci-local.mjs) | `npm run ci:local`: the workflow's jobs, run locally the way CI runs them - see [below](#before-you-push-npm-run-cilocal) |
    | [`.claude/settings.json`](.claude/settings.json), [`.codex/hooks.json`](.codex/hooks.json) | the runtime gate, written by `evidence-layer init claude` and `init codex` |
    | [`scripts/standalone.mjs`](scripts/standalone.mjs) | `npm run standalone`: copies this project out as a repository of its own - see below. Not part of the setup; the copy leaves it behind |
+   | [`docs/decisions/0001-example.md`](docs/decisions/0001-example.md) | two invariants, one enforced by a command and one by "a human" |
 
    The setup is for a project that is its own repository, and inside
    evidence-layer's checkout this one is not. git answers every question from
@@ -35,7 +37,6 @@ It exists twice over.
    there - and a sealed run would fingerprint the whole checkout. So the
    runtime gate and the seal are shown in a copy (step 0); every other step
    runs from here.
-   | [`docs/decisions/0001-example.md`](docs/decisions/0001-example.md) | two invariants, one enforced by a command and one by "a human" |
 
 ## The tour
 
@@ -134,25 +135,81 @@ ran - and the claim says four where the artifact says three. The tag carries a
 predicate, `passed>=4`, so the number is no longer only in the sentence where a
 script cannot reach it.
 
-### 6. Is anything actually running the checks?
+### 6. The wrong number, with no predicate to catch it
+
+```bash
+npx evidence-layer claims examples/plain-node-project/reviews/count-mismatch.md
+```
+
+Exit 1, `claims/count-mismatch` twice. The same mistake as step 5, with the
+predicates left out - and the sentence is still held to the run. "Four passing
+tests" and "2 tests were skipped" are read off the words and compared with the
+work summary's `passed=3 skipped=0`. A number spelled out is the same number.
+Only a count a word ties to the run is read: "adds 3 tests" is about the
+change, and is left alone.
+
+### 7. The wrong kind of run
+
+```bash
+npx evidence-layer claims examples/plain-node-project/reviews/kind-mismatch.md
+```
+
+Exit 1, `claims/kind-mismatch`. "Lint reports no violations" cites a test run
+that passed - real block, right id, exit 0. A test run says nothing about lint,
+so the claim fails whatever that run showed, and since no lint run was gathered
+the fix says so rather than offering one.
+
+### 8. Exit 0 is not the same as "it passed"
+
+```bash
+npx evidence-layer claims examples/plain-node-project/reviews/outcome-mismatch.md
+```
+
+Exit 1, `claims/outcome-mismatch` three times, over three real runs of this
+project's suite: one with a failing test, one the time limit killed (`exit: 124
+(timeout)`), and one where every test was skipped - exit 0, `passed=0`. A
+success claim over any of them fails. Beside each sits the claim the same run
+does back - "1 failing test", "did not complete", "ran 0 tests to completion" -
+and those pass. The skipped run is the one to look at twice: its exit code is
+the one a passing suite has.
+
+### 9. Let the checker apply the fix that needs no judgement
+
+```bash
+npx evidence-layer claims examples/plain-node-project/reviews/fix-me.md
+cp examples/plain-node-project/reviews/fix-me.md review-copy.md
+npx evidence-layer claims review-copy.md --fix
+```
+
+The first prints three errors - a wrong count, the wrong kind of run, a
+predicate key that does not exist - each with a `fix:` read off the run: the
+claim it does back, or the grounding line with its own predicates. `--fix`
+writes to the file, hence the copy: it marks every claim an error failed
+UNVERIFIED, checks again, and exits 0. It never rewrites a sentence or a
+predicate to fit its run, so the cheapest way past a finding says less, never
+more. Delete `review-copy.md` afterwards.
+
+### 10. Is anything actually running the checks?
 
 ```bash
 npx evidence-layer governance --repo examples/plain-node-project --decisions examples/plain-node-project/docs/decisions
 ```
 
 [`docs/decisions/0001-example.md`](docs/decisions/0001-example.md) declares two
-invariants. One names `npm test`, which
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs - reachable, pass.
-The other is enforced "by a human", which names no command at all - a warning,
-because an invariant nothing can run is decoration, and the check says so
-rather than guessing.
+invariants. One names `npm run evidence` - the gather, which runs the suite and
+fails when it does - and [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+runs it: reachable, pass. The other is enforced "by a human", which names no
+command at all - a warning, because an invariant nothing can run is decoration,
+and the check says so rather than guessing.
 
-Note the npm shorthand: the workflow says `npm test`, not `npm run test`. That
-case was found by building this fixture, not assumed - a scanner that only knew
-`npm run <name>` reported the script as unreached in the most common project
-layout there is.
+This invariant used to name `npm test`, which the workflow ran - written
+in npm's shorthand, not `npm run test`, a case found by building this fixture:
+a scanner that only knew `npm run <name>` reported the script as unreached in
+the most common project layout there is. The shorthand is still recognised,
+and `test/governance.test.ts` holds the scanner to it; CI here simply no
+longer runs the suite twice.
 
-### 7. The same findings, for a program
+### 11. The same findings, for a program
 
 ```bash
 npx evidence-layer claims examples/plain-node-project/reviews/bad-claims.md --format json
@@ -164,7 +221,7 @@ npx evidence-layer claims examples/plain-node-project/reviews/bad-claims.md --fo
 review's line, which is what the action in this project's workflow does. The
 exit code is the same in every format.
 
-### 8. Render a run for CI
+### 12. Render a run for CI
 
 ```bash
 npx evidence-layer governance --repo examples/plain-node-project --decisions examples/plain-node-project/docs/decisions > run.txt
@@ -190,7 +247,7 @@ fail. Try any of these:
 - Change `passed>=3` to `passed>=4` in `good-claims.md`'s tag. The block is
   real and the run passed; the number in the claim is wrong, and it says so.
 - Add a fifth `**Claim**:` to `good-claims.md` with no `**Grounding**:` line.
-- Delete `- run: npm test` from `.github/workflows/ci.yml` and re-run step 6.
+- Delete the `npm run evidence` line from `.github/workflows/ci.yml` and re-run step 10.
   The invariant that was passing becomes an error, because nothing reaches the
   command it names any more.
 
@@ -209,6 +266,87 @@ different id. That is correct: a different run is different evidence. If you
 regenerate, update the fence and every tag that addresses it together, which is
 what `npx evidence-layer claims` is there to check you did.
 
+## In CI: gather, review, verify
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is laid out so that each
+command runs once, in parallel where nothing waits on it, and a model spends
+tokens only on reading:
+
+| Job | Runs | Waits on | Required |
+| --- | --- | --- | --- |
+| `evidence` | `npm run evidence` against the base branch - the suite, once, inside the gather; uploads `evidence.local.md` and `change.diff`, and puts the bundle in the job summary for the human reviewer | nothing | yes - it fails when the suite does |
+| `governance` | `evidence-layer governance --enforce` through the action | nothing | yes |
+| `review` | on a pull request that is not a draft: a model reads the bundle, the diff and the files - no shell, so nothing re-run - and writes `ai-review.md` from the bundle's suggested claims; `claims --bundle --fix` marks what the bundle does not back UNVERIFIED; the action checks it against the bundle and the head SHA; it is posted as a comment | `evidence` passing | no |
+
+The `review` job holds the model's blocks to the bundle `evidence` uploaded, not
+to anything in its own job, so the evidence stays CI's: a block the model typed
+or edited is `bundle/not-gathered` or `bundle/edited`, and `--fix` turns the
+claim UNVERIFIED before anyone reads it - correcting it costs no second model
+turn. A red suite costs no tokens at all: `review` runs only once `evidence`
+passed.
+
+To use it, in a repository of its own:
+
+- Depend on evidence-layer from the registry, not `file:../..`, and commit the
+  lockfile. The `bundle` input and the gather's exit code need the release that
+  added them; the action ref names it.
+- Make `evidence` and `governance` required status checks: Settings > Rules >
+  Rulesets > Require status checks to pass. Nothing in the repository can make
+  a check required, and `governance` cannot tell a required job from an
+  optional one - it only reads that a workflow runs the command.
+- For `review`, add an `ANTHROPIC_API_KEY` secret, and optionally a
+  `REVIEW_MODEL` variable (default `claude-haiku-5-5`: copying a claim and its
+  block needs no stronger model). Pull requests from forks get neither secrets
+  nor a token that can comment, which is why `review` is not required.
+- The default branch is `main`; change `branches:` if yours is not.
+
+### Before you push: `npm run ci:local`
+
+`npm run ci:local` runs the workflow's jobs on your machine, in the order and
+shape CI runs them, and ends with what CI would report:
+
+```text
+=== what CI would report ===========================================
+  evidence    required  pass
+  governance  required  pass
+  review      optional  pass - review from the model
+```
+
+- `evidence` and `governance` run side by side; `review` runs only once
+  `evidence` passed, as `needs: evidence` makes it.
+- The review's checks read the bundle from a separate directory - the
+  "artifact" - not from the working tree, so a review that cites a block the
+  gather did not write, or edits one, fails here exactly as it would in CI.
+- The model step is read out of the workflow - its `prompt`, `claude_args` and
+  `settings` - not kept as a second copy, so it cannot drift from what CI asks.
+  It needs the `claude` command (Claude Code) on PATH and spends tokens as the
+  CI job does. `REVIEW_MODEL=claude-sonnet-5-5 npm run ci:local` stands in for
+  the repository variable.
+
+Run it in a repository of its own - `npm run standalone` makes one from this
+template; inside evidence-layer's checkout it refuses, because git would answer
+for evidence-layer. Commit the change first: it gathers from the working tree,
+where CI gathers from the commit, and says so when the two differ.
+
+| Command | What it runs |
+| --- | --- |
+| `npm run ci:local` | every job, the review by the model - against `origin/main`, or `main` when there is no remote |
+| `npm run ci:local -- --base <ref>` | the same, against the base you name |
+| `npm run ci:local -- --review-skeleton` | the review is the bundle's own suggested claims - what the model is asked to copy - so the whole pipeline runs with no model and no tokens |
+| `npm run ci:local -- --review notes.md` | the review is a file you wrote, checked as CI would check the model's |
+| `npm run ci:local -- --no-review` | the two required jobs only |
+
+It exits 0 when every job that ran passed, 1 when one failed, and 2 when it
+could not run - a bad option, no repository of its own, or a review step in the
+workflow it cannot read. A model step on an empty diff is skipped rather than
+paid for. What it leaves behind - `evidence.local.md`, `change.diff`,
+`ai-review.md` - is ignored by git, and the summary prints where the "artifact"
+copy is.
+
+What it does not reproduce: a fresh checkout and `npm ci` (it uses your working
+tree and `node_modules`), the pull request comment (it prints the review
+instead), and required checks, which only the repository's settings make.
+
 ## Using it on your own project
 
 Nothing above is specific to this fixture except the paths:
@@ -221,8 +359,8 @@ npx evidence-layer init claude           # and/or: init codex - the runtime gate
 ```
 
 Then copy [`scripts/evidence.mjs`](scripts/evidence.mjs) and change the
-commands to your project's, and add the action to your workflow as
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) does. A project whose
+commands to your project's, and copy [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+as [below](#in-ci-gather-review-verify) describes. A project whose
 tests are not `node --test` swaps `summariseNodeTest` for `summariseJUnit`,
 `summarisePytest` or `summariseVitest` from the same adapter.
 

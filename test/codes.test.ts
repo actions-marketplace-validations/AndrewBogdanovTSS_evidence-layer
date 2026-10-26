@@ -8,8 +8,9 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { lintClaims } from '../src/core/claims'
+import { downgradeClaims, lintClaims } from '../src/core/claims'
 import { CODES } from '../src/core/codes'
+import type { CodedFinding } from '../src/core/codes'
 
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..')
 const BIN = join(root, 'dist', 'bin', 'evidence-layer.mjs')
@@ -46,6 +47,40 @@ describe('the reason-code registry', () => {
   })
 })
 
+// An exit code alone would let a fixture fail for some other reason than the
+// one it is named for, and nobody would notice the rule it shows had stopped
+// firing. So each is held to the codes it exists to show, and to nothing else.
+describe('the example reviews that fail on purpose', () => {
+  const failing = (review: string) => {
+    const path = join('examples', 'plain-node-project', 'reviews', review)
+    const markdown = readFileSync(join(root, path), 'utf8')
+    return { markdown, findings: lintClaims(markdown, path), errors: (fs: CodedFinding[]) => fs.filter((f) => f.level === 'error') }
+  }
+
+  it.each([
+    ['kind-mismatch.md', ['claims/kind-mismatch']],
+    ['count-mismatch.md', ['claims/count-mismatch']],
+    ['outcome-mismatch.md', ['claims/outcome-mismatch']],
+    ['fix-me.md', ['claims/bad-predicate', 'claims/count-mismatch', 'claims/kind-mismatch']],
+  ])('%s fails with %j and nothing else', (review, codes) => {
+    const { findings, errors } = failing(review)
+    expect([...new Set(errors(findings).map((f) => f.code))].sort()).toEqual(codes)
+    expect(findings.filter((f) => f.level === 'warning' || f.level === 'unverifiable')).toEqual([])
+  })
+
+  it('outcome-mismatch.md passes the claim each run does back', () => {
+    const { findings } = failing('outcome-mismatch.md')
+    expect(findings.filter((f) => f.code === 'claims/verified').length).toBe(3)
+  })
+
+  it('fix-me.md is clean once every failing claim is marked UNVERIFIED', () => {
+    const { markdown, findings, errors } = failing('fix-me.md')
+    const { markdown: fixed, downgraded } = downgradeClaims(markdown, findings)
+    expect(downgraded.length).toBe(3)
+    expect(errors(lintClaims(fixed, 'fix-me.md'))).toEqual([])
+  })
+})
+
 describe('--format json', () => {
   const asJson = (...args: string[]) => {
     const text = cli(...args)
@@ -59,7 +94,7 @@ describe('--format json', () => {
     for (const review of ['examples/plain-node-project/reviews/good-claims.md', 'examples/plain-node-project/reviews/predicate-mismatch.md']) {
       const { text, json, report } = asJson('claims', review)
       expect(json.status).toBe(text.status)
-      expect(report.schema).toBe(4)
+      expect(report.schema).toBe(5)
       expect(report.check).toBe('claims')
       expect(report.findings.every((f) => f.code !== undefined && f.code in CODES)).toBe(true)
     }

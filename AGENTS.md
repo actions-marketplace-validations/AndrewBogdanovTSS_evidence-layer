@@ -12,10 +12,24 @@ own first consumer: every check runs against this repository too.
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm test                    # builds, then runs the suite - the CLI tests run dist/
-pnpm check:all --enforce     # every repository check, plus: does anything run them?
+pnpm typecheck               # the one step check:all does not run
+pnpm check:all --enforce     # pnpm test (builds, then runs the suite - the CLI tests
+                             # run dist/), every repository check, plus: does
+                             # anything run them?
 ```
+
+`check:all` runs the suite once and hands its output to `check:docs`, so there
+is no need to run `pnpm test` first; on its own, `pnpm check:docs` runs the
+suite itself.
+
+`pnpm ci:local` is the same in one command, and more: it runs the jobs of
+`.github/workflows/ci.yml` a machine can run - typecheck, `check:all
+--enforce` and `check:ladder` on every commit beyond `origin/master` side by
+side, then smoke, the action on a fixture review and the example's handoff -
+and reports them the way CI would. What it cannot run - the Node matrices,
+`action-from-npm` - it reports as `unverifiable`, never as a pass. A job added
+to the workflow must be added to `scripts/ci-local.ts` too, or said there to be
+out of reach; `test/ci-local.test.ts` fails until it is.
 
 `pnpm hooks:install` wires the same fast checks into a pre-push hook.
 
@@ -35,6 +49,13 @@ rewrites those in the release commit, so only a bump by hand has to.
 `examples/plain-node-project/` is a template here, not a repository: git, and
 so its hooks and its seal, answer for this checkout. `npm run standalone` in it
 makes the copy where they work, and `test/example.test.ts` runs on that copy.
+Its workflow does not run here either - GitHub reads only the top level - so
+the `example-evidence` and `example-review` jobs in `.github/workflows/ci.yml`
+run its gather-then-verify handoff on such a copy. A change to how the
+example's workflow hands the bundle over changes those jobs too, and
+the example's own `scripts/ci-local.mjs` (`npm run ci:local` there, which
+reads the review step out of the workflow) must still read it -
+`test/example.test.ts` holds it to that.
 
 ## Rules the tests enforce
 
@@ -67,6 +88,15 @@ makes the copy where they work, and `test/example.test.ts` runs on that copy.
   Match the density and voice of the file you are in.
 - The honest path must be cheaper than the convenient one. A feature that makes
   a correct review cost more than an unbacked one does not ship in that form.
+- Code is TypeScript, and `pnpm typecheck` covers all of it - `src/`, `bin/`,
+  `scripts/`, `demo/`, `test/` - with repository tooling run by `tsx`. Four
+  places stay plain JavaScript, because of where they run: `scripts/smoke.mjs`
+  (CI runs it on bare Node 22.0.0 with nothing installed - that is what proves
+  there are no runtime dependencies), `action/run.mjs` (GitHub runs the action
+  from the repository with no install or build), `plugins/*/scripts/*.mjs`
+  (Claude Code runs it with `node` in a user's project) and
+  `examples/plain-node-project/` (the portability fixture is a project with no
+  TypeScript on purpose).
 
 ## Commits
 

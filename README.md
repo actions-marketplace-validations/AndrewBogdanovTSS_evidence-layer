@@ -84,6 +84,15 @@ What this layer changes, concretely:
   than the shortcut loses to the shortcut every time, model or not. A run its
   time limit killed is suggested as "did not complete", never as a failure it
   never got to report.
+- **A wrong citation comes back with its correction.** A writer that cites
+  the wrong block or the wrong number - the mistake a smaller model makes most -
+  is not left to work out the fix from a sentence. Every failing finding
+  carries one, read off the run rather than guessed: the claim the cited run
+  does back, as the skeleton would write it, with its predicates filled in.
+  `claims review.md --fix` applies the one fix that needs no judgement, marking
+  every failing claim UNVERIFIED, so the cheapest way past a finding says less,
+  never more. Nothing here needs the writer to be a strong model; it needs it
+  to copy two lines.
 - **Agent review gets a scorecard instead of a vibe.** A commit fixing a bug a
   review let through adds `Missed-By: <review or PR>` to its own message, and
   `governance` extracts those into the journal on every run. "Is the agent's
@@ -134,7 +143,7 @@ npx evidence-layer journal tag <id> real     # mark a finding real or false
 
 | command | the claim it makes falsifiable |
 | --- | --- |
-| `claims` | "I verified this" - every `VERIFIED[id]` tag must address a real artifact collected at the commit under review |
+| `claims` | "I verified this" - every `VERIFIED[id]` tag must address a real artifact collected at the commit under review; with `--seal`, one this checkout's gather wrote about this code, and with `--bundle`, one a given bundle carries |
 | `receipt` | "I read this repository" - the review's Access Receipt must match the repository's own git output, and a cited file must be backed by that file's own verbatim first line |
 | `ci-summary` | nothing; it renders a captured run for a CI job summary, and reports `unverifiable` when it has nothing to read |
 | `governance` | "this is enforced" - every invariant a decision record declares must be reachable from a git hook or a CI workflow, and no governance exception may be past its expiry; on the way, it records every `Missed-By:` commit trailer into the journal (`--no-journal` to skip) |
@@ -202,7 +211,9 @@ The last step belongs in CI rather than on the machine that wrote the change -
 [the GitHub Action](#in-ci-the-github-action) is one step. Every check here can
 be run by whoever wrote the diff, which makes a passing local run a
 self-report - and anyone who skipped the gathering step skips the verifying
-step just as easily. Same commands, different party. Between the two, the
+step just as easily. Same commands, different party - and for the evidence to
+be the other party's too, the gathering goes in CI as well, ahead of the review
+([below](#in-ci-the-github-action)). Between the two, the
 [runtime gate](#in-an-agents-session-the-runtime-gate) runs them when the agent
 says it is done.
 
@@ -226,6 +237,35 @@ rules are mechanical enough to check without reading the output for sense:
   `lintClaims(md, file, { requireWorkSummary: true })` also rejects a success
   claim over a lint or test artifact that carries no summary.
 
+Two more rules hold the claim's own words to the block it cites, just as
+mechanically:
+
+- **A claim cites a run of the kind it names.** "Lint reports no violations"
+  over a typecheck block is the wrong block - `claims/kind-mismatch` - whatever
+  that typecheck showed. The kinds are `classifyCommand`'s: tests, lint,
+  typecheck, lockfile, audit ("dependency audit", not a bare "audit" or
+  "vulnerability", which are ordinary words in a security fix's claims). A
+  claim that names none, or names several including the run's, is held to
+  nothing.
+- **A count the claim states is the run's count.** "72 passing tests" over a
+  work summary of `passed=71` is `claims/count-mismatch`, predicate or no
+  predicate. A number is read only where a word ties it to the run - "71
+  passing tests", "ran 71 tests", "7 files were linted", "3 skipped" - so
+  "adds 3 tests" and "touches 12 files" are left alone, and so is a sentence
+  about what used to be true ("fixes the 2 failing tests"). Nor is the number
+  a count is taken out of: "3 of 71 tests failed" is not read as 71 failures.
+  A number spelled out, zero to twenty, is the same number: "four passing
+  tests" over `passed=3` fails like "4 passing tests" does. "Ran N tests" may
+  be the passed count or the total; a count of a kind the run does not
+  summarise is left alone.
+
+Each of these rules has a fixture that fails it on purpose, over real runs of
+the example project's suite -
+[`outcome-mismatch.md`](examples/plain-node-project/reviews/outcome-mismatch.md)
+(a failing run, a timed-out one, one where every test was skipped),
+[`kind-mismatch.md`](examples/plain-node-project/reviews/kind-mismatch.md) and
+[`count-mismatch.md`](examples/plain-node-project/reviews/count-mismatch.md).
+
 Those rules read the claim's wording, which is deliberately narrow and only in
 English. A claim can also say outright which numbers it rests on, as
 predicates inside the tag:
@@ -245,6 +285,26 @@ and so is a `VERIFIED[...]` bracket that is not an address at all - it does not
 fall back to bare `VERIFIED`. The skeleton writes the predicates for you, read
 off the run it gathered. There is no duration key: how long a run took is not
 a property of the code.
+
+Every failing finding carries a `fix` where one is mechanical - printed under
+it, as its own field in `--format json`, and in a GitHub annotation. A claim
+over the wrong run, or with the wrong number, is offered the claim its run does
+back; a receipt whose quote is wrong is offered the file's real first line:
+
+```text
+✘ the suite runs four passing tests, including the new string case. (review.md:17)
+        VERIFIED[tests-333881] `passed>=4` does not hold - the artifact says passed=3
+        fix: replace the claim and its grounding with the lines below - or mark the claim UNVERIFIED:
+          **Claim**: The test suite ran 3 passing tests and reports no failures.
+          **Grounding**: VERIFIED[tests-333881: exit=0, passed>=3, failed=0]
+```
+
+`npx evidence-layer claims review.md --fix` marks every claim an error failed
+UNVERIFIED, in the file, and checks it again. It never rewrites a sentence or a
+predicate to fit its run - that would make a claim pass by changing what it
+says - so it is the one fix applied for the writer rather than offered.
+[`fix-me.md`](examples/plain-node-project/reviews/fix-me.md) is a review to
+try it on, a copy of it rather than the file itself.
 
 For a review posted as a pull request comment, `generateClaimSkeleton` and
 `generateSampleSkeleton` take `{ fold: true }`: each artifact block, and the
@@ -334,23 +394,34 @@ catches the default failure, not someone rewriting it on purpose; CI, which
 gathers its own evidence, stays the independent party. Without `--seal`,
 nothing changes and nothing local is read.
 
+It also holds only in the checkout that gathered. Where the review is written
+somewhere else - a later CI job, a person reading the bundle CI uploaded -
+`--bundle <file>` does the provenance half instead: every cited block must be,
+canonically, the one that bundle carries under its id (`bundle/edited`,
+`bundle/not-gathered`). A bundle has no fingerprint of the source, so freshness
+is not checked; give `--sha` the commit under review, and a bundle from any
+other commit fails as `claims/wrong-commit`. A bundle that is not there is bad
+usage, never a pass.
+
 ## In an agent's session: the runtime gate
 
 CI checks a review after a person can already read it. The gate runs the same
 checks at the moment the agent says it is done, so an unbacked "tests pass" is
 caught by the agent that wrote it:
 
-- **When the session starts**, it tells the agent the claim grammar and
-  records which review files exist, so that it later checks only what *this*
-  session wrote.
+- **When the session starts**, it shows the agent the claim grammar as a
+  filled-in example rather than a template of placeholders, lists the claims
+  the sealed run for this commit backs, ready to paste, and records which
+  review files exist, so that it later checks only what *this* session wrote.
 - **Before each file write**, it refuses a write into its own ledger - an
   accidental-write guard, not a sandbox: a shell command can still write there.
 - **When the agent stops**, it runs `claims`, `receipt` and, against the sealed
   run, provenance and freshness - over every review file the session changed
   (default `review.md`) and the `**Claim**:` lines of the agent's final reply,
   whose ids resolve against the sealed bundle. Ordinary prose is not graded. An
-  error blocks the stop with the findings as the reason, and the agent fixes its
-  claims.
+  error blocks the stop, and the agent fixes its claims from the reason: one
+  numbered item per failing claim with its problem and its fix, the `--fix`
+  command for a review file, and the claims the current run does back.
 
 Two budgets keep it from becoming a trap. A **retry episode** opens at the first
 stop with errors and closes at the first clean one; inside it the gate blocks
@@ -415,12 +486,14 @@ package's `2` (bad usage) is their "block".
 
 ```yaml
 - uses: actions/checkout@v5
-- uses: AndrewBogdanovTSS/evidence-layer@v0.14.0
+- uses: AndrewBogdanovTSS/evidence-layer@v0.16.0
   with:
     claims: review.md            # comma- or newline-separated
     # receipt: review.md         # needs fetch-depth: 0 and the target branch
     # governance: 'true'         # also run governance --enforce
     # strict: 'true'             # warnings and unverifiable fail too
+    # bundle: evidence.local.md  # hold every cited block to the bundle CI gathered
+    # sha: ${{ github.event.pull_request.head.sha }}
 ```
 
 Every finding that is not a pass becomes an annotation on its line, titled by
@@ -433,6 +506,22 @@ names any other. Its outputs are
 `exit-code` and `conclusion` (`success`, `failure`, `flaky`, `misconfigured`),
 and a step with nothing to check, a missing review or an unusable package is
 `misconfigured`, never a pass.
+
+For the evidence to be CI's rather than the author's, gather in CI. The
+gather exits 1 when a step failed, bundle written regardless, so it can be the
+job's test run rather than a second one; upload the bundle, and the review -
+written by a model in a later job, or by a person reading the uploaded bundle -
+is held to it with `bundle:`, which runs `claims --bundle`. Without that, a
+check in another job proves only that each tag names a block in the review
+itself, which a block typed by hand under an invented id satisfies; `--seal`
+proves more, but only in the checkout that gathered.
+[`examples/plain-node-project/.github/workflows/ci.yml`](examples/plain-node-project/.github/workflows/ci.yml)
+is the layout: gather, then review, then verify
+([DEC-0011](docs/decisions/0011-ci-evidence-crosses-jobs-as-a-bundle.md)).
+Its `npm run ci:local` runs those jobs on your machine the same way, the model
+step read out of the workflow rather than copied, so you see what CI will
+report before you push - see
+[the example's README](examples/plain-node-project/README.md#before-you-push-npm-run-cilocal).
 
 Outside the action, `--format github` on `claims`, `receipt` and `governance`
 does the same in any `run:` step. A review is text written by someone this
@@ -530,11 +619,13 @@ its own unconnected `package.json` - that
 `readInvariants`, `reachableCommands`, `lintClaims`, `checkReceipt` and
 `renderSummary` against, and [`test/example.test.ts`](test/example.test.ts)
 runs its whole loop on a standalone copy - gather with counts, a review of the
-suggested claims passing `claims --seal`, and the same review failing once the
-code changes. Clone it, run the layer against it, and see the checks fail on
-purpose: [`examples/plain-node-project/README.md`](examples/plain-node-project/README.md)
+suggested claims passing `claims --seal` and, where there is no seal,
+`claims --bundle`, the same review failing once the code changes, and the
+gather failing when the suite does. Clone it, run the layer against it, and see
+the checks fail on purpose: [`examples/plain-node-project/README.md`](examples/plain-node-project/README.md)
 is the guided version, and the project is set up the way one using this
-package should be - evidence script, CI action, runtime-gate hooks.
+package should be - evidence script, a CI workflow that gathers before anyone
+reviews, runtime-gate hooks.
 
 Inside this checkout it is a template, not a repository: git answers from
 evidence-layer's top level, so its hooks would check evidence-layer's
@@ -558,7 +649,7 @@ own checks and then checks that something actually runs them - an invariant no
 git hook or CI workflow reaches is a finding, because a rule with no trigger is
 decoration.
 
-The suite is **503 tests** across **38 files**, and that sentence is checked
+The suite is **552 tests** across **41 files**, and that sentence is checked
 too - `check:docs` runs the suite and compares. Change the number and watch it
 fail; a check nobody has seen fail is indistinguishable from a check that
 cannot fail.
@@ -569,6 +660,7 @@ pnpm check:docs     # do the claims on this page still hold?
 pnpm check:deps     # is every dependency this package declares actually used?
 pnpm check:ladder   # did this commit climb the decision ladder it says it did? (CI: every new commit)
 pnpm check:all      # every check, plus: does anything run them?
+pnpm ci:local       # CI's jobs on this machine, reported as CI would - what it cannot run is `unverifiable`
 pnpm journal:report # what the checks have found here, over time
 ```
 
@@ -576,7 +668,10 @@ CI runs the suite on Node 22 and 24 and, in a separate job with no package
 manager and no install, takes the `dist/` the build job produced and runs it on
 bare `node` - 22.0.0, the oldest `engines` allows, as well as 22 and 24. If that
 job passes, "zero runtime dependencies" is a checked fact for everything the
-smoke script loads, rather than a sentence on this page.
+smoke script loads, rather than a sentence on this page. Two more jobs run the
+example project's CI handoff, which GitHub would not run from inside this
+repository: one gathers in a standalone copy and uploads the bundle, the other
+downloads it and holds a review to it with the action's `bundle:` input.
 
 ## What this does not do
 

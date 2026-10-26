@@ -17,6 +17,8 @@
  * Exit codes: 0 warn-only or clean - 1 --enforce and at least one error -
  * 3 a flaky finding with no error present - 2 bad usage.
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -31,8 +33,8 @@ import {
   report,
   run,
 } from '../src/index'
-import type { Finding } from '../src/index'
-import { setupLadder } from '../demo/ladder.mjs'
+import type { Finding, Report, ReportFinding, RunResult } from '../src/index'
+import { setupLadder } from '../demo/ladder'
 
 const HELP = `
 pnpm check:all [--enforce] [--fast] [--only <check>] [--repo <path>] [--no-json]
@@ -48,16 +50,50 @@ exit 0 = warn-only or clean, 1 = --enforce and at least one error,
 3 = a flaky finding with no error present, 2 = bad usage
 `
 
-/** Runs another command in this repo and folds its exit code into one finding, flaky included. */
-function runCheck(name: string, command: string, repo: string): Finding {
+/** Runs another command in this repo and prints what it said. */
+function runPrinted(command: string, repo: string): RunResult {
   const result = run(command, { cwd: repo, timeoutMs: 600_000 })
   // `raw`, not `output`: this is printed for a person to read, and the colour
   // the sub-check emitted is the fastest way to see which line failed.
   console.log(result.raw)
+  return result
+}
+
+/** Folds a command's exit code into one finding, flaky included. */
+function toFinding(name: string, result: RunResult): Finding {
   return {
     level: result.exitCode === 0 ? 'pass' : result.exitCode === EXIT.flaky ? 'flaky' : 'error',
     claim: name,
-    detail: '`' + command + '` exited ' + result.exitCode,
+    detail: '`' + result.command + '` exited ' + result.exitCode,
+  }
+}
+
+/** Runs another command in this repo and folds its exit code into one finding, flaky included. */
+function runCheck(name: string, command: string, repo: string): Finding {
+  return toFinding(name, runPrinted(command, repo))
+}
+
+/**
+ * `check:docs`, handed the suite run this script already made, so that it
+ * reads the README's test count from that instead of making a second one.
+ * With no run to hand over - `--only docs`, or `--fast`, which skips that
+ * claim anyway - it runs exactly as it does on its own.
+ */
+function checkDocs(repo: string, fast: boolean, suite: RunResult | undefined): Finding {
+  const name = 'README claims'
+  if (!suite) return runCheck(name, 'pnpm check:docs' + (fast ? ' --fast' : ''), repo)
+  const dir = mkdtempSync(join(tmpdir(), 'evidence-layer-suite-'))
+  try {
+    const file = join(dir, 'output.txt')
+    // `output`, not `raw`: the normalised text `check:docs` parses when it
+    // runs the suite itself, so the count is read from the same thing.
+    writeFileSync(file, suite.output)
+    // Quoted the way `check:docs` quotes the CLI's path. The directory is one
+    // this script just made, not text from a review, but on Windows it sits
+    // under the user's profile, whose name may hold a space.
+    return runCheck(name, 'pnpm check:docs --suite-output "' + file + '"', repo)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 }
 
@@ -77,6 +113,10 @@ function checkFixtures(repo: string): Finding[] {
     { file: 'phantom-artifact.md', exit: EXIT.failed },
     { file: 'shotgun-artifact.md', exit: EXIT.ok },
     { file: 'predicate-mismatch.md', exit: EXIT.failed },
+    { file: 'kind-mismatch.md', exit: EXIT.failed },
+    { file: 'count-mismatch.md', exit: EXIT.failed },
+    { file: 'outcome-mismatch.md', exit: EXIT.failed },
+    { file: 'fix-me.md', exit: EXIT.failed },
   ]
 
   const findings = expectations.map(({ file, exit }): Finding => {
@@ -95,9 +135,18 @@ function checkFixtures(repo: string): Finding[] {
 
 /**
  * The ladder demo's two commits, rebuilt on top of HEAD and checked. They are
- * not files but refs (see `demo/ladder.mjs`), so they are recreated first -
+ * not files but refs (see `demo/ladder.ts`), so they are recreated first -
  * idempotently, outside `refs/heads/`, touching neither the working tree nor
  * the index. A clone where git refuses that gets `unverifiable`, not a pass.
+ *
+ * The exit code alone is not the claim. A checker that throws also exits 1,
+ * so `ladder-bad` would "still fail" with its parser gone - which is what
+ * TypeScript 7 did, its root export no longer carrying the compiler API. So
+ * each fixture is run with `--format json` and must also produce the findings
+ * it was built to produce, at the level it was built to produce them: the
+ * renamed copy of `formatPrice`, caught by the trailer check and by the clone
+ * check. Matched on the claim and the detail rather than a code, because
+ * `check:ladder` is this repository's script and its findings carry none.
  */
 function checkLadderFixtures(repo: string): Finding[] {
   try {
@@ -111,20 +160,77 @@ function checkLadderFixtures(repo: string): Finding[] {
       },
     ]
   }
-  const expectations = [
-    { ref: 'demo/ladder-bad', exit: EXIT.failed },
-    { ref: 'demo/ladder-refactor', exit: EXIT.ok },
+  const rung = 'Ladder-Rung: 2 reuse formatPrice'
+  const clone = 'no function this commit adds is an existing one renamed'
+  const expectations: { ref: string; exit: number; findings: { claim: string; level: string; detail?: RegExp }[] }[] = [
+    {
+      ref: 'demo/ladder-bad',
+      exit: EXIT.failed,
+      findings: [
+        { claim: rung, level: 'error', detail: /\bformatDiscount\b.* is formatPrice renamed/ },
+        { claim: clone, level: 'error', detail: /\bformatDiscount\b.* is formatPrice\b/ },
+      ],
+    },
+    {
+      ref: 'demo/ladder-refactor',
+      exit: EXIT.ok,
+      findings: [
+        { claim: rung, level: 'pass' },
+        { claim: clone, level: 'pass' },
+      ],
+    },
   ]
-  return expectations.map(({ ref, exit }): Finding => {
-    const result = run('pnpm check:ladder ' + ref, { cwd: repo, timeoutMs: 120_000 })
-    return {
-      level: result.exitCode === exit ? 'pass' : 'error',
-      claim: 'fixture ' + ref + ' still exits ' + exit,
-      detail: result.exitCode === exit ? 'as expected' : 'exited ' + result.exitCode + ' instead',
-      expected: exit,
-      observed: result.exitCode,
+  return expectations.map(({ ref, exit, findings }): Finding => {
+    const result = run('pnpm check:ladder ' + ref + ' --format json', { cwd: repo, timeoutMs: 120_000 })
+    const claim = 'fixture ' + ref + ' still exits ' + exit + ', for the reason it was built for'
+    if (result.exitCode !== exit) {
+      return { level: 'error', claim, detail: 'exited ' + result.exitCode + ' instead', expected: exit, observed: result.exitCode }
     }
+    const reported = ladderFindings(result.output)
+    if (!reported) {
+      return {
+        level: 'error',
+        claim,
+        detail: 'exited ' + exit + ' but printed no report - the checker did not get as far as checking',
+        expected: exit,
+        observed: result.exitCode,
+      }
+    }
+    const missing = findings.filter(
+      (want) =>
+        !reported.some((f) => f.claim === want.claim && f.level === want.level && (!want.detail || want.detail.test(f.detail))),
+    )
+    return missing.length === 0
+      ? { level: 'pass', claim, detail: 'as expected', expected: exit, observed: result.exitCode }
+      : {
+          level: 'error',
+          claim,
+          detail:
+            'exited ' + exit + ', but without ' + missing.map((m) => m.level + ' "' + m.claim + '"').join(' or ') +
+            ' - it reported: ' + (reported.map((f) => f.level + ' "' + f.claim + '"').join(', ') || 'nothing'),
+          expected: exit,
+          observed: result.exitCode,
+        }
   })
+}
+
+/**
+ * The findings out of `check:ladder --format json`. The document is the whole
+ * of the script's stdout, but `run` hands back pnpm's lines around it too, so
+ * it is cut out by its first and last lines - `JSON.stringify` with an indent
+ * puts the outer braces, and only those, at the start of a line.
+ */
+function ladderFindings(output: string): ReportFinding[] | null {
+  const lines = output.split('\n')
+  const start = lines.indexOf('{')
+  const end = lines.indexOf('}', start)
+  if (start === -1 || end === -1) return null
+  try {
+    const parsed = JSON.parse(lines.slice(start, end + 1).join('\n')) as Partial<Report>
+    return Array.isArray(parsed.findings) ? parsed.findings : null
+  } catch {
+    return null
+  }
 }
 
 function main(): void {
@@ -139,14 +245,16 @@ function main(): void {
 
   const findings: Finding[] = []
 
-  if (!only || only === 'docs') {
-    findings.push(runCheck('README claims', 'pnpm check:docs' + (fast ? ' --fast' : ''), repo))
-  }
+  // The suite first, and once. `check:docs` needs a suite run to read the
+  // README's test count from, and it used to make its own: two full runs of
+  // the same suite at the same commit, minutes each on Windows. Going first
+  // also means the docs check reads the CLI this run just built, not whatever
+  // the previous build left in `dist/`.
+  const suite = (!only || only === 'tests') && !fast ? runPrinted('pnpm test', repo) : undefined
+  if (suite) findings.push(toFinding('the suite, and the package it builds', suite))
+  if (!only || only === 'docs') findings.push(checkDocs(repo, fast, suite))
   if (!only || only === 'deps') {
     findings.push(runCheck('package.json dependencies', 'pnpm check:deps', repo))
-  }
-  if ((!only || only === 'tests') && !fast) {
-    findings.push(runCheck('the suite, and the package it builds', 'pnpm test', repo))
   }
   if (!only || only === 'fixtures') findings.push(...checkFixtures(repo))
   if (!only || only === 'reachability') findings.push(...checkReachability(repo))

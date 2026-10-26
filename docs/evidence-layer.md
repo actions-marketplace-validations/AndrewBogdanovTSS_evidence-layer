@@ -151,6 +151,14 @@ manager> run evidence` when there is an `evidence` script. A block that backs a
 suggested claim is printed once, under *Suggested claims* with that claim; its
 step's section points there.
 
+A step that fails still gets its block - a failing run is evidence - and the
+gather goes on. What it returns says how each one ended: `steps`, one entry per
+planned step with its exit code and stop reason or the reason it was skipped,
+and `stepFailed(step)` to read one. `pnpm evidence` and the example's
+`scripts/evidence.mjs` exit 1 when one failed, after writing the bundle, so a
+CI job can run the gather *instead of* its test step rather than as well as it:
+the job fails when the suite does, and the suite runs once.
+
 ### 4. `pnpm check:claims <review.md>` - is every claim backed?
 
 A review can label each claim VERIFIED, DOCUMENTED, INFERRED or UNVERIFIED. That
@@ -180,6 +188,26 @@ unknown key, a fragment that does not parse, a count the artifact does not
 carry, a bracket that is not an address) is an error rather than a predicate
 quietly dropped, because a dropped predicate is a typo that passes.
 
+Two rules read the claim's words against the block it cites, predicate or
+not. A claim that names a kind of run - tests, lint, typecheck, lockfile,
+audit - must cite a run of a kind it names (`claims/kind-mismatch`), checked
+before the outcome rules, because a verdict on the wrong run says nothing about
+the claim. And a count it states about the run ("71 passing tests", "ran 71
+tests", "7 files were linted", "0 failures") must be the count the run's work
+summary carries (`claims/count-mismatch`). A number no word ties to the run
+("adds 3 tests") is not read, nor is any count in a sentence about what used
+to be true ("fixes the 2 failing tests"), nor the number a count is taken out
+of ("3 of 71 tests failed").
+Both catch the citation a writer most often gets wrong, the wrong block,
+without reading the output for sense.
+
+A failing finding carries a `fix` where one is mechanical: the claim its run
+does back, written as the skeleton writes it, or the grounding line with the
+run's own predicates - so a writer that cannot work out the correction is
+handed it. `--fix` applies the one fix that needs no judgement: every claim an
+error failed is marked UNVERIFIED in the file, and the review is checked again.
+It never edits a sentence or a predicate to fit its run.
+
 Where the grade sits: on the `**Claim**:` line or within two lines of prose
 below it (`lintClaims(md, file, { gradeWindow })` widens that for a review
 template that puts more between them). A fenced block between the claim and
@@ -205,16 +233,35 @@ pnpm check:claims examples/plain-node-project/reviews/good-claims.md      # clea
 pnpm check:claims examples/plain-node-project/reviews/phantom-artifact.md # ids reference nothing here
 pnpm check:claims examples/plain-node-project/reviews/shotgun-artifact.md # one artifact, four claims
 pnpm check:claims examples/plain-node-project/reviews/predicate-mismatch.md # the artifact says three, not four
+pnpm check:claims examples/plain-node-project/reviews/count-mismatch.md   # "four passing tests", no predicate
+pnpm check:claims examples/plain-node-project/reviews/kind-mismatch.md    # a lint claim over a test run
+pnpm check:claims examples/plain-node-project/reviews/outcome-mismatch.md # failed, timed out, all skipped
+pnpm check:claims examples/plain-node-project/reviews/fix-me.md           # three fixes to print; --fix it on a copy
 ```
 
-These five are asserted to keep behaving that way by `pnpm check:all`, which
+These nine are asserted to keep behaving that way by `pnpm check:all`, which
 runs each of them and checks the exit code against the one written down above.
 A negative fixture that quietly starts passing is a checker that quietly
-stopped working.
+stopped working. An exit code alone would not notice a fixture failing for the
+wrong reason, so `test/codes.test.ts` also holds the last four to the codes
+they are named for, and to nothing else.
 
 Read `bad-claims.md` and `good-claims.md` side by side. The repaired one is
 longer, hedges more and sounds less confident - and it is the only one of the
 two that could be proved wrong.
+
+`--seal` holds every cited block to the run this checkout gathered, and so
+works only where the gather ran. `--bundle <file>` holds it to a bundle file
+instead - in CI, the one a gather job uploaded, wherever the review was then
+written: every cited block must be, canonically, the one the bundle carries
+under its id. Without one of the two, `claims` cannot tell a gathered block
+from one typed by hand under an invented id: the id hashes the full output and
+the block shows a trimmed one, so the id cannot be recomputed from it. A
+bundle is as trustworthy as where it came from - CI's own artifact, not one
+committed beside the review - and carries no fingerprint of the source, so
+pass `--sha` with the commit under review; without it, the review's receipt
+and then the bundle's own `- Head:` line name the commit. A bundle file that
+is not there is bad usage, exit 2, never a pass.
 
 Referencing an artifact is not supposed to cost more than writing a bare tag -
 see step 3 below. `pnpm evidence` computes every id and writes the
@@ -284,7 +331,7 @@ decorative rule from a live one.
 pnpm check:all                            # this repo: every invariant reachable
 pnpm check:all --only reachability        # just the trigger graph, in a second
 
-# the fixture: one invariant enforced by `npm test`, one "enforced by a human"
+# the fixture: one invariant enforced by `npm run evidence`, one "enforced by a human"
 npx evidence-layer governance --repo examples/plain-node-project --decisions examples/plain-node-project/docs/decisions
 ```
 
@@ -398,12 +445,12 @@ be true and useless.
 github` for a GitHub Actions step - annotations titled by code, then the text,
 then a job summary (see the README's section on the Action). With `json`,
 stdout is one JSON document and nothing else - the same report `check:all`
-prints between its delimiters, schema 4 - and the exit code is the one the
+prints between its delimiters, schema 5 - and the exit code is the one the
 text mode would have given:
 
 ```json
 {
-  "schema": 4,
+  "schema": 5,
   "check": "claims",
   "mode": "default",
   "generatedAt": "2026-10-18T14:43:52.827Z",
@@ -415,11 +462,18 @@ text mode would have given:
       "detail": "VERIFIED[tests-333881] `passed>=4` does not hold - the artifact says passed=3",
       "file": "examples/plain-node-project/reviews/predicate-mismatch.md",
       "line": 17,
-      "code": "claims/predicate-unmet"
+      "code": "claims/predicate-unmet",
+      "fix": "replace the claim and its grounding with the lines below - or mark the claim UNVERIFIED:\n**Claim**: The test suite ran 3 passing tests and reports no failures.\n**Grounding**: VERIFIED[tests-333881: exit=0, passed>=3, failed=0]"
     }
   ]
 }
 ```
+
+`fix`, present where one is mechanical, is what would settle the finding,
+written to be applied as it stands: the lines to put in place of a claim -
+read off the cited run, never off the claim - the row a receipt is missing,
+or the command to run. Its wording may change like `detail`'s; the lines
+after its first are the text to paste.
 
 `claim` and `detail` are written for a person and will be reworded. `code` is
 written for a program: it names the rule that produced the finding, and a
@@ -439,6 +493,8 @@ pass and one naming each way it fails. Every code, and nothing else:
 | `claims/bad-predicate` | a predicate in a `VERIFIED[id: ...]` tag cannot be checked |
 | `claims/outcome-mismatch` | the cited artifact's exit code or summary contradicts what the claim says |
 | `claims/predicate-unmet` | the cited artifact does not satisfy a predicate the claim states |
+| `claims/kind-mismatch` | the claim names a kind of run - tests, lint, typecheck - and cites a run of another kind |
+| `claims/count-mismatch` | a count the claim states is not the count the cited run's work summary carries |
 | `claims/verified` | a `VERIFIED[id]` claim is backed by the artifact it names |
 | `claims/no-nearby-artifact` | a bare `VERIFIED` has no artifact block close enough below it |
 | `claims/verified-nearby` | a bare `VERIFIED` claim is backed by the artifact block below it |
@@ -486,6 +542,10 @@ pass and one naming each way it fails. Every code, and nothing else:
 | `seal/stale` | the code changed after the evidence was gathered |
 | `seal/partial-coverage` | what was hashed is unchanged, but part of the tree could not be hashed |
 | `seal/fresh` | the code is what it was when the evidence was gathered |
+| `bundle/broken` | the bundle to check against cannot be read as an evidence bundle |
+| `bundle/not-gathered` | the bundle has no artifact with this id - naming the bundle's id for the same command, when it has one |
+| `bundle/edited` | the cited block differs from the one in the bundle |
+| `bundle/provenance` | the cited block is the one in the bundle |
 | `governance/no-invariants` | no decision record declares an invariant |
 | `governance/no-command` | an invariant names no runnable command |
 | `governance/unknown-script` | an invariant names a script package.json does not have |
@@ -513,6 +573,7 @@ The table is checked against `src/core/codes.ts` by `check:docs`, both ways.
 | `.githooks/pre-push`, after `pnpm hooks:install` | `check:all --fast --enforce` |
 | the GitHub Action, `uses: ./` in the same workflow | `claims` over a fixture review, with this commit's build |
 | the GitHub Action, in a job with nothing installed | the same action fetching the published package through `npx`, on a review that passes and one that fails |
+| `example-evidence`, then `example-review`, in the same workflow | the example project's handoff on a standalone copy: gathered on one runner, the bundle carried as an artifact, the review held to it with `bundle:` on another |
 
 The workflow is not merely a place to run the commands. It settles a conflict of
 interest: every check here can be run by whoever wrote the change, which makes a

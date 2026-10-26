@@ -35,6 +35,8 @@ export const CODES = {
   'claims/bad-predicate': 'a predicate in a `VERIFIED[id: ...]` tag cannot be checked',
   'claims/outcome-mismatch': 'the cited artifact\'s exit code or summary contradicts what the claim says',
   'claims/predicate-unmet': 'the cited artifact does not satisfy a predicate the claim states',
+  'claims/kind-mismatch': 'the claim names a kind of run - tests, lint, typecheck - and cites a run of another kind',
+  'claims/count-mismatch': 'a count the claim states is not the count the cited run\'s work summary carries',
   'claims/verified': 'a `VERIFIED[id]` claim is backed by the artifact it names',
   'claims/no-nearby-artifact': 'a bare `VERIFIED` has no artifact block close enough below it',
   'claims/verified-nearby': 'a bare `VERIFIED` claim is backed by the artifact block below it',
@@ -86,6 +88,12 @@ export const CODES = {
   'seal/stale': 'the code changed after the evidence was gathered',
   'seal/partial-coverage': 'what was hashed is unchanged, but part of the tree could not be hashed',
   'seal/fresh': 'the code is what it was when the evidence was gathered',
+
+  // bundle - is a cited block the one a given evidence bundle carries
+  'bundle/broken': 'the bundle to check against cannot be read as an evidence bundle',
+  'bundle/not-gathered': 'the bundle has no artifact with this id',
+  'bundle/edited': 'the cited block differs from the one in the bundle',
+  'bundle/provenance': 'the cited block is the one in the bundle',
 
   // governance - does anything actually run the checks that claim enforcement
   'governance/no-invariants': 'no decision record declares an invariant',
