@@ -487,7 +487,7 @@ package's `2` (bad usage) is their "block".
 
 ```yaml
 - uses: actions/checkout@v5
-- uses: AndrewBogdanovTSS/evidence-layer@v0.17.0
+- uses: AndrewBogdanovTSS/evidence-layer@v0.18.0
   with:
     claims: review.md            # comma- or newline-separated
     # receipt: review.md         # needs fetch-depth: 0 and the target branch
@@ -565,6 +565,12 @@ points at it, which no file shows. A template from another repository cannot be
 read here, so while one is unread, what nothing readable reaches is
 `unverifiable` rather than an error
 ([DEC-0013](docs/decisions/0013-governance-reads-azure-pipelines.md)).
+
+[`examples/plain-node-project/azure-pipelines.yml`](examples/plain-node-project/azure-pipelines.yml)
+is the whole layout - gather, then review, then verify, each job posting the
+pull request status a branch policy can require - and its `npm run ci:local --
+--pipeline azure` runs it locally, the model step read out of the pipeline
+([the example's README](examples/plain-node-project/README.md#in-azure-pipelines)).
 
 ## Supported hosts
 
@@ -686,7 +692,7 @@ own checks and then checks that something actually runs them - an invariant no
 git hook or CI workflow reaches is a finding, because a rule with no trigger is
 decoration.
 
-The suite is **584 tests** across **42 files**, and that sentence is checked
+The suite is **594 tests** across **42 files**, and that sentence is checked
 too - `check:docs` runs the suite and compares. Change the number and watch it
 fail; a check nobody has seen fail is indistinguishable from a check that
 cannot fail.
